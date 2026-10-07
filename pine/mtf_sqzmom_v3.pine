@@ -1,0 +1,206 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © <TradingView username>
+// Based on "Squeeze Momentum Indicator [LazyBear]" — original concept by John Carter (TTM Squeeze)
+//@version=6
+indicator("MTF Squeeze Momentum v3", shorttitle = "MTF SQZ", overlay = false)
+
+// ═══════════════ Squeeze settings ═══════════════
+grpS         = "Squeeze settings"
+length       = input.int(20,    "BB Length",          group = grpS)
+lengthKC     = input.int(20,    "KC Length",          group = grpS)
+multKC       = input.float(1.5, "KC MultFactor",      group = grpS)
+useTrueRange = input.bool(true, "Use TrueRange (KC)", group = grpS)
+useBBMult    = input.bool(false,"Use BB Mult (fix original quirk)", group = grpS)
+mult         = input.float(2.0, "BB MultFactor",      group = grpS)
+
+// ═══════════════ Timeframes ═══════════════
+grpT = "Timeframes (แถวบน → ล่าง)"
+tf1  = input.timeframe("60",  "Row 1", group = grpT)
+tf2  = input.timeframe("240", "Row 2", group = grpT)
+tf3  = input.timeframe("D",   "Row 3", group = grpT)
+tf4  = input.timeframe("W",   "Row 4", group = grpT)
+tf5  = input.timeframe("M",   "Row 5", group = grpT)
+
+// ═══════════════ Entry signals ═══════════════
+grpE       = "Entry signals"
+trigRow    = input.int(2, "Trigger row (หาจังหวะเข้า)", minval = 1, maxval = 5, group = grpE, tooltip = "ค่าเริ่มต้น Row 2 = 4H")
+useFire    = input.bool(true, "Entry: squeeze fire",        group = grpE)
+useCross   = input.bool(true, "Entry: momentum ตัดเส้น 0",  group = grpE)
+bias1      = input.bool(false, "Bias ต้องตรงกับ Row 1", group = grpE)
+bias2      = input.bool(false, "Bias ต้องตรงกับ Row 2", group = grpE)
+bias3      = input.bool(true,  "Bias ต้องตรงกับ Row 3", group = grpE)
+bias4      = input.bool(true,  "Bias ต้องตรงกับ Row 4", group = grpE)
+bias5      = input.bool(false, "Bias ต้องตรงกับ Row 5", group = grpE)
+allowShort = input.bool(true, "แสดงสัญญาณ SHORT", group = grpE)
+exitMode   = input.string("Fade", "ออกเมื่อ", options = ["Fade", "Zero cross"], group = grpE,
+             tooltip = "Fade = ออกเมื่อโมเมนตัมเริ่มแผ่ว (lime→green / red→maroon) ออกเร็ว\nZero cross = ออกเมื่อโมเมนตัมข้ามเส้น 0 ถือนานกว่า")
+showOnChart = input.bool(true, "แสดงสัญญาณบนกราฟราคา", group = grpE)
+
+// ═══════════════ Display ═══════════════
+grpD      = "Display"
+normMode  = input.string("Range", "Normalize by", options = ["Range", "ATR"], group = grpD)
+normLen   = input.int(100, "Range lookback", group = grpD)
+amp       = input.float(2.2, "Bar height", step = 0.1, group = grpD)
+noRepaint = input.bool(true, "Confirmed bars only (no repaint)", group = grpD)
+colSqzOn  = input.color(color.orange, "Squeeze ON",    group = grpD)
+colFired  = input.color(color.gray,   "Squeeze fired", group = grpD)
+colNoSqz  = input.color(color.blue,   "No squeeze",    group = grpD)
+showTable = input.bool(false, "Show table", group = grpD)
+tablePos  = input.string("top_right", "Table position", options = ["top_right", "top_left", "bottom_right", "bottom_left"], group = grpD)
+
+// ═══════════════ Core calc ═══════════════
+// คืนค่า [normalized momentum, momState, sqzState]
+// momState: 2 lime, 1 green, -1 maroon, -2 red, 0 n/a | sqzState: 1 ON, 2 fired, 0 none
+sqzCalc(int off) =>
+    src     = close
+    basis   = ta.sma(src, length)
+    dev     = (useBBMult ? mult : multKC) * ta.stdev(src, length)
+    upperBB = basis + dev
+    lowerBB = basis - dev
+    ma      = ta.sma(src, lengthKC)
+    rangema = ta.sma(useTrueRange ? ta.tr : high - low, lengthKC)
+    upperKC = ma + rangema * multKC
+    lowerKC = ma - rangema * multKC
+    sqzOn   = lowerBB > lowerKC and upperBB < upperKC
+    sqzOff  = lowerBB < lowerKC and upperBB > upperKC
+    center  = math.avg(math.avg(ta.highest(high, lengthKC), ta.lowest(low, lengthKC)), ta.sma(close, lengthKC))
+    val     = ta.linreg(src - center, lengthKC, 0)
+    atrN    = val / ta.atr(lengthKC)
+    rngN    = val / ta.highest(math.abs(val), normLen)
+    n       = normMode == "ATR" ? atrN : rngN
+    v   = val[off]
+    p   = nz(val[off + 1])
+    mom = na(v) ? 0 : v > 0 ? (v > p ? 2 : 1) : (v < p ? -2 : -1)
+    sq  = sqzOn[off] ? 1 : sqzOff[off] ? 2 : 0
+    [n[off], mom, sq]
+
+off  = noRepaint ? 1 : 0
+look = noRepaint ? barmerge.lookahead_on : barmerge.lookahead_off
+
+[n1, m1, s1] = request.security(syminfo.tickerid, tf1, sqzCalc(off), lookahead = look)
+[n2, m2, s2] = request.security(syminfo.tickerid, tf2, sqzCalc(off), lookahead = look)
+[n3, m3, s3] = request.security(syminfo.tickerid, tf3, sqzCalc(off), lookahead = look)
+[n4, m4, s4] = request.security(syminfo.tickerid, tf4, sqzCalc(off), lookahead = look)
+[n5, m5, s5] = request.security(syminfo.tickerid, tf5, sqzCalc(off), lookahead = look)
+
+// ═══════════════ Helpers ═══════════════
+momColor(int m) => m == 2 ? color.lime : m == 1 ? color.green : m == -2 ? color.red : m == -1 ? color.maroon : color.gray
+sqzColor(int s) => s == 1 ? colSqzOn : s == 2 ? colFired : colNoSqz
+tfLabel(string tf) => tf == "60" ? "1H" : tf == "240" ? "4H" : tf == "D" ? "1D" : tf == "W" ? "1W" : tf == "M" ? "1M" : tf
+barH(float n) => normMode == "ATR" ? math.max(-2.5, math.min(2.5, n)) / 2.5 * amp : n * amp
+valText(float n) => na(n) ? "n/a" : normMode == "ATR" ? str.tostring(n, "+#.##;-#.##") + " ATR" : str.tostring(n * 100, "+#;-#") + "%"
+sigText(int m, int s) =>
+    s == 1 ? (m > 0 ? "WAIT ▲" : m < 0 ? "WAIT ▼" : "WAIT") :
+     m == 2 ? "BUY" : m == 1 ? "SELL" : m == -2 ? "SHORT" : m == -1 ? "COVER" : "n/a"
+sigColor(int m, int s) => s == 1 ? colSqzOn : momColor(m)
+
+// ═══════════════ Entry / Exit logic ═══════════════
+trigN = switch trigRow
+    1 => n1
+    2 => n2
+    3 => n3
+    4 => n4
+    => n5
+trigM = switch trigRow
+    1 => m1
+    2 => m2
+    3 => m3
+    4 => m4
+    => m5
+trigS = switch trigRow
+    1 => s1
+    2 => s2
+    3 => s3
+    4 => s4
+    => s5
+
+fired   = trigS != 1 and trigS[1] == 1          // เพิ่งหลุดจาก squeeze
+crossUp = trigN > 0 and trigN[1] <= 0
+crossDn = trigN < 0 and trigN[1] >= 0
+
+biasBull = (not bias1 or m1 > 0) and (not bias2 or m2 > 0) and (not bias3 or m3 > 0) and (not bias4 or m4 > 0) and (not bias5 or m5 > 0)
+biasBear = (not bias1 or m1 < 0) and (not bias2 or m2 < 0) and (not bias3 or m3 < 0) and (not bias4 or m4 < 0) and (not bias5 or m5 < 0)
+
+longCond  = biasBull and trigM == 2 and ((useFire and fired) or (useCross and crossUp))
+shortCond = allowShort and biasBear and trigM == -2 and ((useFire and fired) or (useCross and crossDn))
+exitLongCond  = exitMode == "Fade" ? trigM != 2  : trigN < 0
+exitShortCond = exitMode == "Fade" ? trigM != -2 : trigN > 0
+
+var int pos = 0                                  // 1 long, -1 short, 0 flat
+longEntry  = longCond  and pos != 1
+shortEntry = shortCond and pos != -1
+longExit   = pos == 1  and (exitLongCond or shortEntry)
+shortExit  = pos == -1 and (exitShortCond or longEntry)
+
+if longExit or shortExit
+    pos := 0
+if longEntry
+    pos := 1
+if shortEntry
+    pos := -1
+
+// ═══════════════ Plots: 5 histograms ═══════════════
+plot(20 + barH(n1), "1 mom", momColor(m1), 3, plot.style_columns, histbase = 20)
+plot(15 + barH(n2), "2 mom", momColor(m2), 3, plot.style_columns, histbase = 15)
+plot(10 + barH(n3), "3 mom", momColor(m3), 3, plot.style_columns, histbase = 10)
+plot(5  + barH(n4), "4 mom", momColor(m4), 3, plot.style_columns, histbase = 5)
+plot(0  + barH(n5), "5 mom", momColor(m5), 3, plot.style_columns, histbase = 0)
+
+plot(20, "1 sqz", sqzColor(s1), 2, plot.style_cross)
+plot(15, "2 sqz", sqzColor(s2), 2, plot.style_cross)
+plot(10, "3 sqz", sqzColor(s3), 2, plot.style_cross)
+plot(5,  "4 sqz", sqzColor(s4), 2, plot.style_cross)
+plot(0,  "5 sqz", sqzColor(s5), 2, plot.style_cross)
+
+// ไฮไลต์พื้นหลังในแผงตอนมีสัญญาณเข้า
+bgcolor(longEntry ? color.new(color.lime, 75) : shortEntry ? color.new(color.red, 75) : na)
+
+// ═══════════════ Signals บนกราฟราคา ═══════════════
+plotshape(showOnChart and longEntry,  "BUY",   style = shape.labelup,   location = location.belowbar, color = color.lime,   text = "BUY",   textcolor = color.black, size = size.small, force_overlay = true)
+plotshape(showOnChart and longExit,   "SELL",  style = shape.labeldown, location = location.abovebar, color = color.green,  text = "SELL",  textcolor = color.white, size = size.small, force_overlay = true)
+plotshape(showOnChart and shortEntry, "SHORT", style = shape.labeldown, location = location.abovebar, color = color.red,    text = "SHORT", textcolor = color.white, size = size.small, force_overlay = true)
+plotshape(showOnChart and shortExit,  "COVER", style = shape.labelup,   location = location.belowbar, color = color.maroon, text = "COVER", textcolor = color.white, size = size.small, force_overlay = true)
+
+// ═══════════════ ป้ายด้านขวา ═══════════════
+var array<label> lbls = array.new<label>()
+if barstate.islast
+    tfs  = array.from(tf1, tf2, tf3, tf4, tf5)
+    ns   = array.from(n1, n2, n3, n4, n5)
+    moms = array.from(m1, m2, m3, m4, m5)
+    sqzs = array.from(s1, s2, s3, s4, s5)
+    posText = pos == 1 ? " [LONG]" : pos == -1 ? " [SHORT]" : " [FLAT]"
+    if lbls.size() == 0
+        for i = 0 to 4
+            lbls.push(label.new(bar_index, 20 - i * 5, "", style = label.style_label_left, color = color(na), size = size.small))
+    for i = 0 to 4
+        m   = moms.get(i)
+        s   = sqzs.get(i)
+        lbl = lbls.get(i)
+        star = i + 1 == trigRow ? " ★" : ""
+        lbl.set_x(bar_index + 2)
+        lbl.set_text(tfLabel(tfs.get(i)) + star + "  " + sigText(m, s) + "  " + valText(ns.get(i)) + (i + 1 == trigRow ? posText : ""))
+        lbl.set_textcolor(sigColor(m, s))
+
+// ═══════════════ ตาราง (เลือกเปิดได้) ═══════════════
+tpos = tablePos == "top_left" ? position.top_left : tablePos == "bottom_right" ? position.bottom_right : tablePos == "bottom_left" ? position.bottom_left : position.top_right
+var table t = table.new(tpos, 3, 6, border_width = 1)
+if showTable and barstate.islast
+    tfs  = array.from(tf1, tf2, tf3, tf4, tf5)
+    ns   = array.from(n1, n2, n3, n4, n5)
+    moms = array.from(m1, m2, m3, m4, m5)
+    sqzs = array.from(s1, s2, s3, s4, s5)
+    t.cell(0, 0, "TF",     text_color = chart.fg_color, text_size = size.small)
+    t.cell(1, 0, "Signal", text_color = chart.fg_color, text_size = size.small)
+    t.cell(2, 0, "Mom",    text_color = chart.fg_color, text_size = size.small)
+    for i = 0 to 4
+        m = moms.get(i)
+        s = sqzs.get(i)
+        t.cell(0, i + 1, tfLabel(tfs.get(i)) + (i + 1 == trigRow ? " ★" : ""), text_color = chart.fg_color, text_size = size.small)
+        t.cell(1, i + 1, sigText(m, s), bgcolor = sigColor(m, s), text_color = color.white, text_size = size.small)
+        t.cell(2, i + 1, valText(ns.get(i)), bgcolor = momColor(m), text_color = color.white, text_size = size.small)
+
+// ═══════════════ Alerts ═══════════════
+alertcondition(longEntry,  "BUY",   "MTF SQZ: BUY {{ticker}} @ {{close}}")
+alertcondition(longExit,   "SELL",  "MTF SQZ: SELL (ปิด long) {{ticker}} @ {{close}}")
+alertcondition(shortEntry, "SHORT", "MTF SQZ: SHORT {{ticker}} @ {{close}}")
+alertcondition(shortExit,  "COVER", "MTF SQZ: COVER (ปิด short) {{ticker}} @ {{close}}")
