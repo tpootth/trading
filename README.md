@@ -16,4 +16,9 @@
 2. ลบโค้ดเดิมทิ้ง แล้ววางโค้ดจาก `pine/mtf_sqzmom_v3.pine`
 3. กด **Save** แล้วกด **Add to chart** โดยตั้งกราฟเป็น **4H** ให้ตรงกับแถว trigger ที่เป็นค่าเริ่มต้น
 
+## Credit & License
+
+- ตรรกะ squeeze/momentum มาจาก **Squeeze Momentum Indicator [LazyBear]** ซึ่งอิงแนวคิด TTM Squeeze ของ John Carter
+- โค้ดใน repo นี้ใช้สัญญาอนุญาต [Mozilla Public License 2.0](LICENSE)
+
 > ⚠️ โค้ดยังไม่ได้ทดสอบรันใน TradingView และกฎเข้าออกยังไม่ได้ backtest ไม่ใช่คำแนะนำการลงทุน
