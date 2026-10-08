@@ -1,0 +1,438 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © <TradingView username>
+// Smart Money Concepts เขียนใหม่ทั้งหมด (structure / liquidity sweep / order block / FVG / premium-discount)
+// Momentum filter อิงสูตร Squeeze Momentum ของ LazyBear (concept: John Carter's TTM Squeeze)
+//@version=6
+indicator("SMC + SQZ Confluence v2", shorttitle = "SMC v2", overlay = true,
+     max_boxes_count = 200, max_lines_count = 200, max_labels_count = 200, max_bars_back = 500)
+
+// ═══════════════ Market structure ═══════════════
+grpM       = "Market structure"
+swingLen   = input.int(10, "Swing length", minval = 3, maxval = 50, group = grpM,
+             tooltip = "จำนวนแท่งซ้าย/ขวาของ pivot ยิ่งมากยิ่งเห็นแค่ swing ใหญ่ (โครงสร้างยืนยันช้าลง swingLen แท่ง)")
+showStruct = input.bool(true, "แสดง BOS / CHoCH", group = grpM)
+colorBars  = input.bool(false, "ระบายสีแท่งเทียนตาม trend", group = grpM)
+bullCol    = input.color(#089981, "Bullish", group = grpM)
+bearCol    = input.color(#F23645, "Bearish", group = grpM)
+
+// ═══════════════ Liquidity ═══════════════
+grpL      = "Liquidity"
+showEQ    = input.bool(true, "แสดง equal highs / lows", group = grpL)
+eqLen     = input.int(5, "EQ pivot length", minval = 2, maxval = 20, group = grpL)
+eqThr     = input.float(0.1, "EQ ห่างกันไม่เกิน (× ATR)", minval = 0.01, step = 0.01, group = grpL)
+showSweep = input.bool(true, "แสดง liquidity sweep ($)", group = grpL,
+             tooltip = "ไส้เทียนทะลุ swing / EQH / EQL แล้วปิดกลับเข้ามา")
+sweepWin  = input.int(30, "Sweep มีผลกับโซนที่เกิดภายใน (แท่ง)", minval = 1, maxval = 200, group = grpL,
+             tooltip = "ถ้าเกิด sweep แล้วตามด้วยการเบรกโครงสร้างภายในจำนวนแท่งนี้ โซนที่ได้จะถูกติดเกรด A+")
+
+// ═══════════════ Order blocks ═══════════════
+grpO       = "Order blocks"
+showOB     = input.bool(true, "แสดง order block", group = grpO)
+obCount    = input.int(3, "จำนวนต่อฝั่ง", minval = 1, maxval = 10, group = grpO)
+obUseBody  = input.bool(false, "ใช้เฉพาะ body ของแท่ง", group = grpO)
+obLookback = input.int(100, "ค้นย้อนหลังสูงสุด (แท่ง)", minval = 10, maxval = 400, group = grpO)
+
+// ═══════════════ Fair value gaps ═══════════════
+grpF      = "Fair value gaps"
+showFVG   = input.bool(true, "แสดง FVG", group = grpF)
+fvgCount  = input.int(5, "จำนวนต่อฝั่ง", minval = 1, maxval = 20, group = grpF)
+fvgMinAtr = input.float(0.25, "ขนาดขั้นต่ำ (× ATR)", minval = 0, step = 0.05, group = grpF,
+             tooltip = "กรอง gap เล็ก ๆ ที่เป็น noise ออก")
+
+// ═══════════════ Premium / Discount ═══════════════
+grpP   = "Premium / Discount"
+showPD = input.bool(true, "แสดงโซน premium / discount", group = grpP)
+
+// ═══════════════ Signals ═══════════════
+grpS    = "Signals (confluence)"
+showSig = input.bool(true, "แสดงสัญญาณ SMC ▲ / ▼", group = grpS)
+sigFvg  = input.bool(false, "นับการแตะ FVG เป็นจุดเข้าด้วย", group = grpS, tooltip = "ปิด = ใช้เฉพาะ order block")
+onlyAp  = input.bool(false, "แสดงเฉพาะสัญญาณ A+", group = grpS, tooltip = "A+ = โซนเกิดหลัง liquidity sweep")
+usePD   = input.bool(true, "Long เฉพาะใน discount / Short เฉพาะใน premium", group = grpS)
+useMom  = input.bool(true, "ต้องมีโมเมนตัม SQZ หนุน", group = grpS,
+          tooltip = "Long: momentum (สูตร LazyBear) กำลังเพิ่มขึ้น / Short: กำลังลดลง")
+useHtf  = input.bool(true, "ต้องตรงกับโครงสร้าง TF ใหญ่", group = grpS)
+htfTf   = input.timeframe("D", "TF ใหญ่", group = grpS, tooltip = "ต้องใหญ่กว่า TF ของกราฟ ไม่อย่างนั้นตัวกรองนี้จะถูกข้าม")
+
+// ═══════════════ Risk ═══════════════
+grpR     = "Risk (SL / TP)"
+showRisk = input.bool(true, "แสดง SL / TP ของสัญญาณล่าสุด", group = grpR)
+slBuf    = input.float(0.2, "SL เผื่อจากขอบโซน (× ATR14)", minval = 0, step = 0.05, group = grpR)
+rrTp     = input.float(2.0, "TP1 (R multiple)", minval = 0.5, step = 0.5, group = grpR)
+useLiqTp = input.bool(true, "TP2 = liquidity ฝั่งตรงข้าม", group = grpR,
+           tooltip = "Long → swing high / EQH ที่ยังไม่ถูกกวาด, Short → swing low / EQL")
+
+// ═══════════════ Dashboard ═══════════════
+grpD     = "Dashboard"
+showDash = input.bool(true, "แสดงตารางสรุป", group = grpD)
+dashPos  = input.string("bottom_right", "ตำแหน่ง", options = ["top_right", "top_left", "bottom_right", "bottom_left"], group = grpD)
+
+// ═══════════════ Core series ═══════════════
+confirmed = barstate.isconfirmed
+atr       = ta.atr(200)
+atr14     = ta.atr(14)
+
+ph  = ta.pivothigh(high, swingLen, swingLen)
+pl  = ta.pivotlow(low, swingLen, swingLen)
+eph = ta.pivothigh(high, eqLen, eqLen)
+epl = ta.pivotlow(low, eqLen, eqLen)
+
+// momentum แบบ LazyBear บน TF ของกราฟ
+center = math.avg(math.avg(ta.highest(high, 20), ta.lowest(low, 20)), ta.sma(close, 20))
+mom    = ta.linreg(close - center, 20, 0)
+momUp  = mom > mom[1]
+momDn  = mom < mom[1]
+
+// โครงสร้างของ TF ใหญ่ (ใช้แท่งที่ปิดแล้วเท่านั้น จึงไม่ repaint)
+structTrend(int len) =>
+    var float hi = na
+    var float lo = na
+    var int   t  = 0
+    h = ta.pivothigh(high, len, len)
+    l = ta.pivotlow(low, len, len)
+    if not na(h)
+        hi := h
+    if not na(l)
+        lo := l
+    if not na(hi) and close > hi
+        t  := 1
+        hi := na
+    if not na(lo) and close < lo
+        t  := -1
+        lo := na
+    t[1]
+
+htfTrend = request.security(syminfo.tickerid, htfTf, structTrend(swingLen), lookahead = barmerge.lookahead_on)
+htfValid = timeframe.in_seconds(htfTf) > timeframe.in_seconds(timeframe.period)
+
+// ═══════════════ Types & helpers ═══════════════
+type Zone
+    float top
+    float btm
+    int   left
+    int   born
+    box   bx
+    bool  sweep = false          // เกิดหลัง liquidity sweep (เกรด A+)
+    bool  used  = false          // ถูกแตะไปแล้ว
+
+// หาแท่ง order block ใน leg ก่อนเบรก: bullish = แท่งที่ low ต่ำสุด, bearish = แท่งที่ high สูงสุด
+findOB(int n, bool bull) =>
+    float top = na
+    float btm = na
+    int   idx = na
+    int   len = math.min(n, obLookback)
+    if len >= 1
+        for i = 1 to len
+            float hi = obUseBody ? math.max(open[i], close[i]) : high[i]
+            float lo = obUseBody ? math.min(open[i], close[i]) : low[i]
+            if bull ? (na(btm) or lo < btm) : (na(top) or hi > top)
+                top := hi
+                btm := lo
+                idx := bar_index - i
+    [top, btm, idx]
+
+addZone(array<Zone> zones, float t, float b, int left, color c, bool show, int borderT, int maxN, bool swept) =>
+    box bx = show ? box.new(left, t, bar_index, b, border_color = color.new(c, borderT), bgcolor = color.new(c, 85), extend = extend.right) : na
+    zones.unshift(Zone.new(t, b, left, bar_index, bx, swept))
+    if zones.size() > maxN
+        box.delete(zones.pop().bx)
+
+// ลบโซนที่ใช้ไม่ได้แล้ว และหาโซนที่ถูกแตะครั้งแรกบนแท่งนี้
+// คืนค่า [แตะหรือไม่, โซนที่แตะเป็น A+ หรือไม่, ขอบนอกสุดของโซนที่แตะ (ไว้วาง SL)]
+updateZones(array<Zone> zones, bool bull, bool byClose, color c) =>
+    bool  tapped = false
+    bool  swept  = false
+    float edge   = na
+    if zones.size() > 0
+        for i = zones.size() - 1 to 0
+            z = zones.get(i)
+            broken = bull ? (byClose ? close : low) < z.btm : (byClose ? close : high) > z.top
+            if broken
+                box.delete(z.bx)
+                zones.remove(i)
+            else if not z.used and bar_index > z.born and (bull ? low <= z.top : high >= z.btm)
+                z.used := true
+                tapped := true
+                swept  := swept or z.sweep
+                edge   := bull ? (na(edge) ? z.btm : math.min(edge, z.btm)) : (na(edge) ? z.top : math.max(edge, z.top))
+                if not na(z.bx)
+                    z.bx.set_bgcolor(color.new(c, 93))
+    [tapped, swept, edge]
+
+midIdx(int a, int b) => int((a + b) / 2)
+recent(int idx, int win) => not na(idx) and bar_index - idx <= win
+trendText(int t) => t == 1 ? "Bullish ▲" : t == -1 ? "Bearish ▼" : "—"
+trendColor(int t) => t == 1 ? bullCol : t == -1 ? bearCol : color.gray
+
+// ═══════════════ State ═══════════════
+var float swH       = na
+var int   swHIdx    = na
+var bool  swHBroken = true
+var float swL       = na
+var int   swLIdx    = na
+var bool  swLBroken = true
+var int   trend     = 0          // 1 bullish, -1 bearish
+
+var float trTop    = na          // dealing range ปัจจุบัน
+var int   trTopIdx = na
+var float trBtm    = na
+var int   trBtmIdx = na
+
+var float lastEph    = na
+var int   lastEphIdx = na
+var float lastEpl    = na
+var int   lastEplIdx = na
+
+var float liqHi    = na          // buy-side liquidity ที่ยังไม่ถูกกวาด
+var int   liqHiIdx = na
+var float liqLo    = na          // sell-side liquidity ที่ยังไม่ถูกกวาด
+var int   liqLoIdx = na
+var int   lastBullSweep = na     // แท่งล่าสุดที่กวาด sell-side (หนุนฝั่ง long)
+var int   lastBearSweep = na
+
+var array<Zone> bullOB  = array.new<Zone>()
+var array<Zone> bearOB  = array.new<Zone>()
+var array<Zone> bullFVG = array.new<Zone>()
+var array<Zone> bearFVG = array.new<Zone>()
+
+var array<line>  riskLines  = array.new<line>()
+var array<label> riskLabels = array.new<label>()
+var string lastEvt = "—"
+
+bool bullBOS   = false
+bool bearBOS   = false
+bool bullCHoCH = false
+bool bearCHoCH = false
+bool bullSweep = false
+bool bearSweep = false
+bool bullTap   = false
+bool bearTap   = false
+bool longSig   = false
+bool shortSig  = false
+bool longAp    = false
+bool shortAp   = false
+
+// ═══════════════ Main (เฉพาะแท่งที่ปิดแล้ว) ═══════════════
+if confirmed
+    // --- swing points, dealing range, liquidity levels
+    if not na(ph)
+        swH       := ph
+        swHIdx    := bar_index - swingLen
+        swHBroken := false
+        trTop     := ph
+        trTopIdx  := swHIdx
+        liqHi     := ph
+        liqHiIdx  := swHIdx
+    if not na(pl)
+        swL       := pl
+        swLIdx    := bar_index - swingLen
+        swLBroken := false
+        trBtm     := pl
+        trBtmIdx  := swLIdx
+        liqLo     := pl
+        liqLoIdx  := swLIdx
+
+    // --- equal highs / lows (ใช้เป็น liquidity level ด้วย)
+    if not na(eph)
+        if not na(lastEph) and math.abs(eph - lastEph) < eqThr * atr
+            liqHi    := math.max(eph, lastEph)
+            liqHiIdx := lastEphIdx
+            if showEQ
+                line.new(lastEphIdx, lastEph, bar_index - eqLen, eph, color = bearCol, style = line.style_dotted)
+                label.new(midIdx(lastEphIdx, bar_index - eqLen), liqHi, "EQH", color = color(na),
+                     style = label.style_label_down, textcolor = bearCol, size = size.tiny)
+        lastEph    := eph
+        lastEphIdx := bar_index - eqLen
+    if not na(epl)
+        if not na(lastEpl) and math.abs(epl - lastEpl) < eqThr * atr
+            liqLo    := math.min(epl, lastEpl)
+            liqLoIdx := lastEplIdx
+            if showEQ
+                line.new(lastEplIdx, lastEpl, bar_index - eqLen, epl, color = bullCol, style = line.style_dotted)
+                label.new(midIdx(lastEplIdx, bar_index - eqLen), liqLo, "EQL", color = color(na),
+                     style = label.style_label_up, textcolor = bullCol, size = size.tiny)
+        lastEpl    := epl
+        lastEplIdx := bar_index - eqLen
+
+    // --- liquidity sweep: ไส้ทะลุแต่ปิดกลับ / ปิดทะลุจริง = level หมดความหมาย
+    if not na(liqHi) and high > liqHi
+        if close < liqHi
+            bearSweep     := true
+            lastBearSweep := bar_index
+            lastEvt       := "Sweep ▼"
+            if showSweep
+                line.new(liqHiIdx, liqHi, bar_index, liqHi, color = color.new(bearCol, 40), style = line.style_dotted)
+                label.new(bar_index, high, "$", yloc = yloc.abovebar, color = color(na),
+                     style = label.style_label_down, textcolor = bearCol, size = size.small)
+        liqHi := na
+    if not na(liqLo) and low < liqLo
+        if close > liqLo
+            bullSweep     := true
+            lastBullSweep := bar_index
+            lastEvt       := "Sweep ▲"
+            if showSweep
+                line.new(liqLoIdx, liqLo, bar_index, liqLo, color = color.new(bullCol, 40), style = line.style_dotted)
+                label.new(bar_index, low, "$", yloc = yloc.belowbar, color = color(na),
+                     style = label.style_label_up, textcolor = bullCol, size = size.small)
+        liqLo := na
+
+    if na(trTop) or high > trTop
+        trTop    := high
+        trTopIdx := bar_index
+    if na(trBtm) or low < trBtm
+        trBtm    := low
+        trBtmIdx := bar_index
+
+    // --- bullish break
+    if not swHBroken and not na(swH) and close > swH
+        bullCHoCH := trend == -1
+        bullBOS   := not bullCHoCH
+        trend     := 1
+        swHBroken := true
+        lastEvt   := bullCHoCH ? "CHoCH ▲" : "BOS ▲"
+        if showStruct
+            line.new(swHIdx, swH, bar_index, swH, color = bullCol, style = line.style_dashed)
+            label.new(midIdx(swHIdx, bar_index), swH, bullCHoCH ? "CHoCH" : "BOS", color = color(na),
+                 style = label.style_label_down, textcolor = bullCol, size = size.tiny)
+        [t, b, idx] = findOB(bar_index - swHIdx, true)
+        if not na(t)
+            addZone(bullOB, t, b, idx, bullCol, showOB, 50, obCount, recent(lastBullSweep, sweepWin))
+
+    // --- bearish break
+    if not swLBroken and not na(swL) and close < swL
+        bearCHoCH := trend == 1
+        bearBOS   := not bearCHoCH
+        trend     := -1
+        swLBroken := true
+        lastEvt   := bearCHoCH ? "CHoCH ▼" : "BOS ▼"
+        if showStruct
+            line.new(swLIdx, swL, bar_index, swL, color = bearCol, style = line.style_dashed)
+            label.new(midIdx(swLIdx, bar_index), swL, bearCHoCH ? "CHoCH" : "BOS", color = color(na),
+                 style = label.style_label_up, textcolor = bearCol, size = size.tiny)
+        [t, b, idx] = findOB(bar_index - swLIdx, false)
+        if not na(t)
+            addZone(bearOB, t, b, idx, bearCol, showOB, 50, obCount, recent(lastBearSweep, sweepWin))
+
+    // --- โซน: OB ใช้ไม่ได้เมื่อแท่ง "ปิด" ทะลุ, FVG ใช้ไม่ได้เมื่อถูกเติมเต็ม
+    [obBullTap, obBullAp, obBullEdge] = updateZones(bullOB,  true,  true,  bullCol)
+    [obBearTap, obBearAp, obBearEdge] = updateZones(bearOB,  false, true,  bearCol)
+    [fvBullTap, fvBullAp, fvBullEdge] = updateZones(bullFVG, true,  false, bullCol)
+    [fvBearTap, fvBearAp, fvBearEdge] = updateZones(bearFVG, false, false, bearCol)
+
+    if (showFVG or sigFvg) and low > high[2] and close[1] > high[2] and low - high[2] >= fvgMinAtr * atr
+        addZone(bullFVG, low, high[2], bar_index - 2, bullCol, showFVG, 100, fvgCount, recent(lastBullSweep, sweepWin))
+    if (showFVG or sigFvg) and high < low[2] and close[1] < low[2] and low[2] - high >= fvgMinAtr * atr
+        addZone(bearFVG, low[2], high, bar_index - 2, bearCol, showFVG, 100, fvgCount, recent(lastBearSweep, sweepWin))
+
+    useBullFvg = sigFvg and fvBullTap
+    useBearFvg = sigFvg and fvBearTap
+    bullTap   := obBullTap or useBullFvg
+    bearTap   := obBearTap or useBearFvg
+    bullAp     = (obBullTap and obBullAp) or (useBullFvg and fvBullAp)
+    bearAp     = (obBearTap and obBearAp) or (useBearFvg and fvBearAp)
+    float bullEdge = obBullTap ? obBullEdge : na
+    if useBullFvg
+        bullEdge := na(bullEdge) ? fvBullEdge : math.min(bullEdge, fvBullEdge)
+    float bearEdge = obBearTap ? obBearEdge : na
+    if useBearFvg
+        bearEdge := na(bearEdge) ? fvBearEdge : math.max(bearEdge, fvBearEdge)
+
+    // --- confluence signals
+    eq     = math.avg(trTop, trBtm)
+    htfOn  = useHtf and htfValid
+    longSig  := bullTap and trend == 1  and (not usePD or close <= eq) and (not useMom or momUp) and (not htfOn or htfTrend == 1)  and (not onlyAp or bullAp)
+    shortSig := bearTap and trend == -1 and (not usePD or close >= eq) and (not useMom or momDn) and (not htfOn or htfTrend == -1) and (not onlyAp or bearAp)
+    longAp   := longSig and bullAp
+    shortAp  := shortSig and bearAp
+
+    if longSig or shortSig
+        bool   isLong = longSig
+        lastEvt := (isLong ? "SMC ▲" : "SMC ▼") + ((isLong ? longAp : shortAp) ? " A+" : "")
+        if showSig
+            label.new(bar_index, isLong ? low : high, lastEvt, yloc = isLong ? yloc.belowbar : yloc.abovebar,
+                 style = isLong ? label.style_label_up : label.style_label_down,
+                 color = isLong ? bullCol : bearCol, textcolor = color.white, size = size.small)
+        if showRisk
+            for l in riskLines
+                line.delete(l)
+            for lb in riskLabels
+                label.delete(lb)
+            riskLines.clear()
+            riskLabels.clear()
+            entry = close
+            sl    = isLong ? bullEdge - slBuf * atr14 : bearEdge + slBuf * atr14
+            risk  = math.abs(entry - sl)
+            tp1   = isLong ? entry + rrTp * risk : entry - rrTp * risk
+            tp2   = isLong ? liqHi : liqLo
+            right = bar_index + 15
+            lvls  = array.from(entry, sl, tp1)
+            names = array.from("Entry", "SL", "TP1 " + str.tostring(rrTp) + "R")
+            cols  = array.from(color.gray, bearCol, bullCol)
+            if not isLong
+                cols := array.from(color.gray, bullCol, bearCol)
+            if useLiqTp and not na(tp2) and (isLong ? tp2 > entry : tp2 < entry)
+                lvls.push(tp2)
+                names.push("TP2 liq")
+                cols.push(isLong ? bullCol : bearCol)
+            if not na(sl)
+                for [i, lv] in lvls
+                    c = cols.get(i)
+                    riskLines.push(line.new(bar_index, lv, right, lv, color = c, style = i == 0 ? line.style_dotted : line.style_solid))
+                    riskLabels.push(label.new(right, lv, names.get(i) + "  " + str.tostring(lv, format.mintick), color = color(na),
+                         style = label.style_label_left, textcolor = c, size = size.tiny))
+
+// ═══════════════ Candle colors ═══════════════
+barcolor(colorBars ? trendColor(trend) : na)
+
+// ═══════════════ Premium / Discount (วาดเฉพาะแท่งสุดท้าย) ═══════════════
+var box  premBox = na
+var box  discBox = na
+var line eqLine  = na
+if showPD and barstate.islast and not na(trTop) and not na(trBtm)
+    eqLvl = math.avg(trTop, trBtm)
+    left  = math.min(trTopIdx, trBtmIdx)
+    box.delete(premBox)
+    box.delete(discBox)
+    line.delete(eqLine)
+    premBox := box.new(left, trTop, bar_index + 10, eqLvl, border_color = color(na), bgcolor = color.new(bearCol, 93),
+         text = "Premium", text_size = size.small, text_color = color.new(bearCol, 30), text_halign = text.align_right, text_valign = text.align_top)
+    discBox := box.new(left, eqLvl, bar_index + 10, trBtm, border_color = color(na), bgcolor = color.new(bullCol, 93),
+         text = "Discount", text_size = size.small, text_color = color.new(bullCol, 30), text_halign = text.align_right, text_valign = text.align_bottom)
+    eqLine  := line.new(left, eqLvl, bar_index + 10, eqLvl, color = color.gray, style = line.style_dotted)
+
+// ═══════════════ Dashboard ═══════════════
+tblPos = switch dashPos
+    "top_right"   => position.top_right
+    "top_left"    => position.top_left
+    "bottom_left" => position.bottom_left
+    => position.bottom_right
+var table dash = table.new(tblPos, 2, 5, bgcolor = color.new(color.black, 30), border_width = 1)
+if showDash and barstate.islast
+    txt = color.white
+    rng = trTop - trBtm
+    pct = rng > 0 ? (close - trBtm) / rng * 100 : na
+    zoneTxt = na(pct) ? "—" : (pct >= 50 ? "Premium " : "Discount ") + str.tostring(pct, "#") + "%"
+    table.cell(dash, 0, 0, "Trend " + timeframe.period, text_color = txt, text_size = size.small)
+    table.cell(dash, 1, 0, trendText(trend), text_color = trendColor(trend), text_size = size.small)
+    table.cell(dash, 0, 1, "Trend " + htfTf, text_color = txt, text_size = size.small)
+    table.cell(dash, 1, 1, htfValid ? trendText(htfTrend) : "TF เล็กกว่ากราฟ", text_color = htfValid ? trendColor(htfTrend) : color.orange, text_size = size.small)
+    table.cell(dash, 0, 2, "Zone", text_color = txt, text_size = size.small)
+    table.cell(dash, 1, 2, zoneTxt, text_color = na(pct) ? txt : pct >= 50 ? bearCol : bullCol, text_size = size.small)
+    table.cell(dash, 0, 3, "Momentum", text_color = txt, text_size = size.small)
+    table.cell(dash, 1, 3, momUp ? "เพิ่มขึ้น ▲" : "ลดลง ▼", text_color = momUp ? bullCol : bearCol, text_size = size.small)
+    table.cell(dash, 0, 4, "ล่าสุด", text_color = txt, text_size = size.small)
+    table.cell(dash, 1, 4, lastEvt, text_color = txt, text_size = size.small)
+
+// ═══════════════ Alerts (ตั้ง Once Per Bar Close) ═══════════════
+alertcondition(bullCHoCH, "Bullish CHoCH",  "SMC: Bullish CHoCH on {{ticker}} {{interval}}")
+alertcondition(bearCHoCH, "Bearish CHoCH",  "SMC: Bearish CHoCH on {{ticker}} {{interval}}")
+alertcondition(bullBOS,   "Bullish BOS",    "SMC: Bullish BOS on {{ticker}} {{interval}}")
+alertcondition(bearBOS,   "Bearish BOS",    "SMC: Bearish BOS on {{ticker}} {{interval}}")
+alertcondition(bullSweep, "Sell-side sweep", "SMC: sell-side liquidity swept on {{ticker}} {{interval}}")
+alertcondition(bearSweep, "Buy-side sweep",  "SMC: buy-side liquidity swept on {{ticker}} {{interval}}")
+alertcondition(bullTap,   "Bullish zone tap", "SMC: price tapped bullish zone on {{ticker}} {{interval}}")
+alertcondition(bearTap,   "Bearish zone tap", "SMC: price tapped bearish zone on {{ticker}} {{interval}}")
+alertcondition(longSig,   "SMC ▲",          "SMC ▲ (confluence long) on {{ticker}} {{interval}} @ {{close}}")
+alertcondition(shortSig,  "SMC ▼",          "SMC ▼ (confluence short) on {{ticker}} {{interval}} @ {{close}}")
+alertcondition(longAp,    "SMC ▲ A+",       "SMC ▲ A+ (after liquidity sweep) on {{ticker}} {{interval}} @ {{close}}")
+alertcondition(shortAp,   "SMC ▼ A+",       "SMC ▼ A+ (after liquidity sweep) on {{ticker}} {{interval}} @ {{close}}")

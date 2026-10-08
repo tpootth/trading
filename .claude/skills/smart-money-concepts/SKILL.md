@@ -1,11 +1,11 @@
 ---
 name: smart-money-concepts
-description: วิเคราะห์กราฟและเขียน/แก้ Pine Script ด้วย Smart Money Concepts (SMC) — market structure (BOS / CHoCH), order block, fair value gap, liquidity (EQH / EQL, sweep), premium / discount และการใช้ร่วมกับ MTF Squeeze Momentum ใน repo นี้. ใช้เมื่อผู้ใช้ส่ง screenshot กราฟให้อ่าน, ถามเรื่อง SMC / ICT / order block / FVG / liquidity, หรือขอแก้ไข pine/smc_sqz_v1.pine
+description: วิเคราะห์กราฟและเขียน/แก้ Pine Script ด้วย Smart Money Concepts (SMC) — market structure (BOS / CHoCH), order block, fair value gap, liquidity (EQH / EQL, sweep), premium / discount และการใช้ร่วมกับ MTF Squeeze Momentum ใน repo นี้. ใช้เมื่อผู้ใช้ส่ง screenshot กราฟให้อ่าน, ถามเรื่อง SMC / ICT / order block / FVG / liquidity, หรือขอแก้ไข pine/smc_sqz_v2.pine
 ---
 
 # Smart Money Concepts (SMC)
 
-โค้ดหลัก: [`pine/smc_sqz_v1.pine`](../../../pine/smc_sqz_v1.pine) (overlay บนกราฟราคา)
+โค้ดหลัก: [`pine/smc_sqz_v2.pine`](../../../pine/smc_sqz_v2.pine) (overlay บนกราฟราคา)
 ใช้คู่กับ: [`pine/mtf_sqzmom_v3.pine`](../../../pine/mtf_sqzmom_v3.pine) (แผงล่าง) และคู่มือ [`docs/sqzmom_guide.md`](../../../docs/sqzmom_guide.md)
 
 ตอบผู้ใช้เป็นภาษาไทย ใช้ศัพท์เทคนิคภาษาอังกฤษตามที่เทรดเดอร์ใช้กัน (BOS, CHoCH, OB, FVG)
@@ -39,17 +39,21 @@ description: วิเคราะห์กราฟและเขียน/แ
 
 ---
 
-## 2. สิ่งที่ `smc_sqz_v1.pine` ทำ (ปรับปรุงจาก SMC ทั่วไป)
+## 2. สิ่งที่ `smc_sqz_v2.pine` ทำ (ปรับปรุงจาก SMC ทั่วไป)
 
 - **ไม่ repaint:** ทุกอย่างคำนวณเฉพาะแท่งที่ปิดแล้ว (`barstate.isconfirmed`) โครงสร้าง TF ใหญ่ใช้แท่งที่ปิดแล้ว (`t[1]` + `lookahead_on`)
-- **เบาบนมือถือ:** จำกัดจำนวน OB และ FVG ต่อฝั่ง ใช้ `extend.right` จึงไม่ต้องอัปเดตกล่องทุกแท่ง ส่วน premium/discount วาดแค่บนแท่งสุดท้าย
+- **Liquidity sweep (`$`):** ไส้เทียนทะลุ swing high/low หรือ EQH/EQL แล้วปิดกลับเข้ามา ถ้าแท่งปิดทะลุจริง ถือว่า level นั้นหมดความหมาย
+- **เกรด A+:** โซน (OB/FVG) ที่เกิดภายใน `sweepWin` แท่งหลัง sweep ฝั่งเดียวกัน ถ้าเปิด *แสดงเฉพาะสัญญาณ A+* จะเหลือเฉพาะ setup ตามลำดับในหัวข้อ 1
 - **สัญญาณ confluence `SMC ▲ / ▼`** ขึ้นเมื่อครบทุกข้อที่เปิดใช้:
-  - ราคาแตะ OB ฝั่งเดียวกับ trend **เป็นครั้งแรก**
+  - ราคาแตะ OB (หรือ FVG ถ้าเปิด *นับการแตะ FVG*) ฝั่งเดียวกับ trend **เป็นครั้งแรก** โซนที่ถูกแตะแล้วจะจางลง
   - trend ของ TF กราฟตรงกัน
   - อยู่ใน discount (long) หรือ premium (short)
   - momentum ของ LazyBear กำลังเพิ่มขึ้น (long) หรือกำลังลดลง (short)
-  - โครงสร้าง TF ใหญ่ตรงกัน
-- **Alerts:** CHoCH, BOS, OB tap และ SMC ▲/▼ ทุกตัวควรตั้งเป็น **Once Per Bar Close**
+  - โครงสร้าง TF ใหญ่ตรงกัน ถ้าตั้ง TF ใหญ่เล็กกว่ากราฟ ตัวกรองนี้จะถูกข้ามและตารางขึ้นเตือนสีส้ม
+- **SL / TP ของสัญญาณล่าสุด:** SL = ขอบนอกของโซนที่แตะ ± `slBuf × ATR14`, TP1 = `rrTp` R, TP2 = liquidity ฝั่งตรงข้ามที่ยังไม่ถูกกวาด
+- **ตารางสรุป:** trend ของ TF กราฟ / TF ใหญ่, ราคาอยู่กี่ % ของ range (premium/discount), โมเมนตัม, เหตุการณ์ล่าสุด
+- **เบาบนมือถือ:** จำกัดจำนวน OB และ FVG ต่อฝั่ง ใช้ `extend.right` จึงไม่ต้องอัปเดตกล่องทุกแท่ง ส่วน premium/discount และตารางวาดแค่บนแท่งสุดท้าย
+- **Alerts:** CHoCH, BOS, sweep, zone tap, SMC ▲/▼, SMC ▲/▼ A+ ทุกตัวควรตั้งเป็น **Once Per Bar Close**
 - ชื่อป้ายไม่ชนกับ MTF SQZ (BUY / SELL / SHORT / COVER) จึงเปิดสองตัวพร้อมกันได้
 
 ---
@@ -98,5 +102,5 @@ description: วิเคราะห์กราฟและเขียน/แ
 
 - [ ] คอมไพล์และรันจริงใน TradingView
 - [ ] internal structure (swing เล็กภายใน swing ใหญ่)
-- [ ] ตรวจจับ liquidity sweep แล้วติดป้ายอัตโนมัติ
-- [ ] แปลงเป็น `strategy()` เพื่อ backtest
+- [ ] แปลงเป็น `strategy()` เพื่อ backtest (ใช้ SL / TP ที่คำนวณไว้แล้ว)
+- [ ] trailing stop หลังถึง TP1
