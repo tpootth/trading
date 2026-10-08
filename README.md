@@ -10,6 +10,12 @@
 | `pine/mtf_sqzmom_v3.pine` | **MTF Squeeze Momentum v3**: histogram 5 time frame ซ้อนกันในแผงเดียว พร้อมสัญญาณ BUY / SELL / SHORT / COVER |
 | `docs/sqzmom_guide.md` | คู่มือฉบับเต็ม: ตรรกะของ SQZMOM, วิธีอ่านป้าย, กฎเข้าออก, time frame ที่เหมาะ, วิธีติดตั้งและเผยแพร่ |
 
+## ตัวอย่างบนกราฟ
+
+MTF Squeeze Momentum v3 บนกราฟ Gold (1D) ใน TradingView: ป้าย SHORT / COVER บนกราฟราคา และ histogram 5 time frame ในแผงล่าง
+
+<img src="docs/images/mtf_sqzmom_v3_gold_1d.png" alt="MTF Squeeze Momentum v3 บนกราฟ Gold 1D" width="360">
+
 ## ใช้งานเร็ว
 
 1. เปิด tradingview.com แล้วเปิด Pine Editor → **Open → New indicator**
