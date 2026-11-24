@@ -2,6 +2,12 @@
 
 อินดิเคเตอร์และโน้ตสำหรับ TradingView (Pine Script v6)
 
+## หน้าตา
+
+![MTF Squeeze Momentum v3 และ SQZMOM_LB บนกราฟ Gold รายวันใน TradingView](docs/images/mtf-sqzmom-gold-1d.jpg)
+
+<sub>Gold (TVC) กราฟรายวัน: แผงบนคือราคาพร้อมป้าย BUY / SELL / SHORT / COVER, แผงกลางคือ **MTF SQZ** (histogram 1H · 4H · 1D · 1W · 1M ซ้อนกัน), แผงล่างคือ **SQZMOM_LB** ภาพจับจาก TradingView วันที่ 24 พ.ย. 2026 ใช้เพื่อแสดงหน้าตาเท่านั้น ไม่ใช่ผล backtest</sub>
+
 ## Folder
 
 | Path | ใช้เก็บอะไร |
